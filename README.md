@@ -1,332 +1,103 @@
-## Small Language Model - Built from Scratch
+# TinyStories SLM: a 30M-parameter GPT trained from scratch
 
-A GPT style transformer language model trained from scratch on the TinyStories dataset demonstratinng deep understanding of modern LLM architecure, training techniques and optimization strategies. 
+A small decoder-only transformer (GPT-2 style), written in PyTorch and trained from scratch on the
+[TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories) dataset on a single Colab T4.
+The training code follows Karpathy's [nanoGPT](https://github.com/karpathy/nanoGPT); the point of the
+project was to build every piece myself, run it end to end, and understand what each choice does.
 
-### Overview
+Everything is in one notebook: [`Tiny_Stories_SLM_From_Scratch.ipynb`](Tiny_Stories_SLM_From_Scratch.ipynb).
 
-Thhis projject implements a decodeer-only transformer archhitecture (similar to GPT-2) trained to generate coherent children's stories. Built entirely from scratch using PyTorch, this demonstrates:
- - Deep understanding of transformer archhitecure
- - Practical experience with trainning optimizations
- - Knowledge of modern NLP optimizations
- - Ability to implement research papers in production code.
-** Key Metrics: **
-- Model Size - 24M Parameters
-- Training Timme: 4.5 hours on T4 GPU
-- Final Training Loss: 2.39
-- Final Validation Loss: 2.39
-- Context Window: 128 tokens
+## Results
 
-## Architecture
-Model Configuration
-- Vocabulary Size: 50,257 (GPT-2 tokenizer)
-- Embedding Dimension: 384
-- Number of Layers: 6
-- Attention Heads: 6
-- Context Length: 128 tokens
-- Dropout: 0.1
-- Total Parameters: ~24 million
+All numbers below come from the logged run in the notebook.
 
-### Core Components
+| | |
+|---|---|
+| Parameters | **29,995,392** (~30.0M; 19.3M of it is the token embedding, shared with the output layer) |
+| Architecture | 6 layers, 6 heads, 384 dims, 128-token context, pre-LayerNorm, GELU MLP (4x) |
+| Tokenizer | GPT-2 BPE via `tiktoken` (50,257 tokens) |
+| Training | 20,000 micro-batches of 32 x 128 tokens = **~82M tokens** (about a sixth of the TinyStories train split) |
+| Optimizer updates | 625 (gradient accumulation over 32 micro-batches, effective batch 1,024 sequences) |
+| Hardware | 1x NVIDIA T4 (Colab), fp16 autocast with `GradScaler` |
+| Final loss | train **2.398**, validation **2.395** (validation perplexity ~11.0) |
 
-**1. Multi-Head Self-Attention**
-- Implements scaled dot-product attention
-- Uses Flash Attention when available (GPU optimization)
-- Casual maskking for autoregressive generation
-- Attention dropout for regularization
+The loss starts near ln(50,257) = 10.8 and train and validation stay together for the whole run,
+so the model is still under-trained, not over-fitting.
 
-**Key Features:** 
+![Train and validation loss, evaluated every 500 micro-batches](assets/loss_curve.png)
 
-- Q, K, V projections with linear layers
-- Efficient attention computation (O(n²d) complexity)
-- Causal masking prevents looking ahead
-- Residual connections for gradient flow
+### Samples
 
- **2. Position-wise Feed-Forward Network:**
- - 4X expansion ratio (384 -> 1536 -> 384)
- - GELU activation function
- - Drpout for regularization
- - Residual connections
+Prompt: *"Once upon a time there was a pumpkin."*
 
-**3. Layer Normalization:**
-- Pre-norm architecture (LayerNorm before attention/MLP)
-- Improves training stability
-- Custom implementation with learnable scale and bias
+```text
+Once upon a time there was a pumpkin. He was so excited to go outside. He had brave and would
+explore. His parents warned him about it. He wasn't so excited and waved.
 
-**4. Positional Embeddings:**
-- Learned absolute positional encodings
-- Added to token embeddings
-- Allows model to understand sequence order
-
-**5. Weight Tying:**
-- Shared weights between token embeddings and output layer
-- Reduces parameter count by ~ 13M parameters
-- Improves generalization
-
-## Dataset - TinyStories Dataset (roneneldan/TinyStories)
-
-- Synthetic dataset of simple children's stories
-- Generated using GPT-3.5 and GPT-4
-- Vocabulary limited to words a 3-4 year old would understand
-- Perfect for training small language models
-
-###Data Processing Pipeline
-
-**1. Tokenization**
-
-- Used GPT-2 BPE tokenizer (tiktoken)
-- Vocabulary size: 50,257 tokens
-- Efficient subword tokenization
-
-
-**2. Binary Storage**
-
-- Converted to binary format for efficient loading
-- Used memory-mapped arrays (np.memmap)
-- Prevents RAM overflow with large datasets
-- **dtype:** uint16 (sufficient for vocab size < 65,536)
-
-
-**3. Batch Generation**
-
-- Dynamic batch sampling
-- Context window: 128 tokens
-- Batch size: 32
-- Efficient GPU utilization
-
-## Training Pipeline 
-Optimization Strategy
-**Learning Rate Schedule**
-- Initial LR: 1e-4
-- Warmup Steps: 1,000 (linear warmup)
-- Decay Schedule: Cosine annealing
-- Min LR: 5e-4
-- Total Steps: 20,000
-
-**Rationale:** Warmup prevents instability in early training, cosine decay smoothly reduces learning rate fro fine-grained optimization. 
-
-AdamW Optimizer
-- Beta1: 0.9
-- Beta2: 0.95 (reduced from default 0.999)
-- Weight Decay: 0.1 (L2 regularization)
-- Epsilon: 1e-9
-  
-Why AdamW? Decouples weight decay from gradient updates, leading to better generalization than standard Adam.
-
-Gradient Accumulation
-- Accumulation Steps: 32
-- Effective Batch Size: 32 × 32 = 1,024
-- Gradient Clipping: max_norm=0.5
-
-Benefit: Simulates large batch training on limited GPU memory, stabilizes training, prevents gradient explosion.
-
-Mixed Precision Training
-- Precision: bfloat16 (if supported), else float16
-- GradScaler for automatic loss scaling
-- 2x faster training, 50% less memory
-
-
-### Training Configuration
-Hyperparameters:
-├── Batch Size: 32
-├── Context Length: 128
-├── Gradient Accumulation: 32 steps
-├── Effective Batch: 1,024 samples
-├── Max Iterations: 20,000
-├── Evaluation Interval: 500 steps
-├── Dropout: 0.1
-└── Device: CUDA (T4 GPU)
-
-Loss Curve Analysis
-The training achieved excellent convergence:
-
-Smooth descent: No significant overfitting
-Final loss ~2.39: Strong performance for this dataset size
-Train-val gap: Minimal, indicating good generalization
-
-## Key Implementation Details
-1. Flash Attention Integration
- ```
- if hasattr(F, "scaled_dot_product_attention"):
-    y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
- ```
-- 2-4x faster than manual atttention
-- Memory efficient (O(n) insttead of O(n^2))
-- Automatically fused operations
-
-2. Efficient Data Loading
-```
-data = np.memmap('train.bin', dtype=np.uint16, mode='r')
-ix = torch.randint(len(data) - block_size, (batch_size,))
+They grabbed the brick, he started running and laughed. He began to rest, until the Linda was
+something gloomy pond. ...
 ```
 
-- Memory-mapped files prevent RAM overflow
-- Random sampling for better generalization
-- Pin memory for async GPU transfer
+Prompt: *"A little dog called Chintu"*
 
-3. Weight Initialization
-- Linear layers: Normal(0, 0.02)
-- Embeddings: Normal(0, 0.02)
-- Output projection: Normal(0, 0.02/sqrt(2*n_layers))
-GPT-2 initialization scheme for stable training at depth.
-
-
-4. Model Checkpoint
+```text
+A little dog called Chintu and said, "Hi miles! Aston Birthday worlds. They took a deep breath and
+started to give them in half. Mittens gave them a towel and shared the sunshine. ...
 ```
-if val_loss < best_val_loss:
-    best_val_loss = val_loss
-    torch.save(model.state_dict(), "best_model_params.pt")
-```
-Saves only the best model based on validation loss.
 
+Sentence-level grammar and the TinyStories register are there; names, pronouns and plot drift
+after a sentence or two. That fits a 30M model at loss ~2.4 (models in the TinyStories paper that
+produce consistent stories train much longer).
 
-### Quantitative Results
-Training Duration: 3 hours 18 minutes
-Final Training Loss: 2.3979
-Final Validation Loss: 2.3949
-Loss Reduction: 75% (from ~9.5 to ~2.4)
-Convergence: Achieved by iteration 15,000
+## How it works
 
+- **Data:** the dataset is tokenized once with `encode_ordinary` and written to `train.bin` /
+  `validation.bin` as `uint16`, then read with `np.memmap` so the full token stream never sits in
+  RAM. Batches are random 128-token windows.
+- **Model:** token + learned position embeddings, 6 pre-norm blocks (causal self-attention with
+  PyTorch's fused `scaled_dot_product_attention`, then a 4x GELU MLP), final LayerNorm, and an
+  output head tied to the token embedding. GPT-2 initialisation, with the residual projections
+  scaled by 1/sqrt(2 x layers).
+- **Training:** AdamW (betas 0.9/0.95, weight decay 0.1), linear warmup then cosine schedule,
+  gradient accumulation, gradient clipping, mixed precision, and the best checkpoint by validation
+  loss is kept.
 
+## What I would fix in this run
 
-Qualitative Results
-Prompt: "Once upon a time there was a pumpkin."
-Generated Story: 
-``` Once upon a time there was a pumpkin. He was so excited to go outside. 
-He had brave and would explore. His parents warned him about it. 
-He wasn't so excited and waved.
+Re-reading the notebook, the run works but several settings don't do what the comments say.
+These are the first things I'd change before training longer:
 
-They grabbed the brick, he started running and laughed. He began to rest, 
-until the Linda was something gloomy pond. She had never decided to go 
-down and try "I want you, now! It's so soft!"
+| Issue | What actually happened | Fix |
+|---|---|---|
+| `min_lr` (5e-4) is higher than the peak `learning_rate` (1e-4) | The "cosine decay" **raised** the learning rate from 1e-4 to 5e-4 over the run (visible in the logged LR) | Peak around 6e-4 to 1e-3 for this size, `min_lr` about a tenth of that |
+| `scheduler.step()` runs on every micro-batch | Warmup of "1,000 steps" lasted ~31 optimizer updates, and the schedule is tied to micro-batches, not updates | Step the scheduler only when the optimizer steps |
+| Gradients are clipped before `scaler.unscale_()` | Under fp16 the clip applies to scaled gradients, so `max_norm=0.5` isn't the real threshold | Call `scaler.unscale_(optimizer)` before `clip_grad_norm_` |
+| `eval_iters = 500` is both the eval interval and the number of eval batches | Each evaluation runs 1,000 forward passes, a large share of training time | Separate `eval_interval` and `eval_iters` (e.g. 500 and 100) |
+| 20,000 micro-batches with accumulation 32 | Only 625 weight updates and ~82M tokens | Count updates, not micro-batches, and train for several thousand updates |
 
-The girl was so excited and ready to go back home. From that day on, 
-she always welcomed his shop and enjoyed carefully walking to leave 
-the cool adventure...
-```
-### Analysis
-Strengths:
+## Next experiments
 
-Coherent sentence structure
-Appropriate vocabulary for children's stories
-Maintains narrative flow
-Proper grammar and punctuation
+- Rerun with the fixes above and compare loss at an equal token budget.
+- Train a TinyStories-sized tokenizer (a few thousand tokens): with GPT-2's 50K vocab, two thirds
+  of the parameters are embeddings.
+- Report validation perplexity per token budget, and score samples for grammar and consistency the
+  way the TinyStories paper does.
 
+## Reproduce
 
-Weaknesses:
-
-Some pronoun inconsistencies
-Occasional semantic drift
-Limited long-range coherence (expected for 128 context)
-
-
-## Research Insights
-**Papers & Concepts Applied**
-
-**1. "Attention Is All You Need" (Vaswani et al., 2017)**
-
-- Implemented multi-head self-attention
-- Scaled dot-product attention mechanism
-- Position-wise feed-forward networks
-
-**2. "Language Models are Unsupervised Multitask Learners" (GPT-2)**
-
-- Decoder-only transformer architecture
-- Weight tying between embeddings and output
-- Pre-norm layer normalization
-
-**3. "Decoupled Weight Decay Regularization" (AdamW)**
-
-- Proper weight decay implementation
-- Better generalization than Adam
-- Separate learning rate and weight decay
-
-**4. "FlashAttention: Fast and Memory-Efficient Exact Attention"**
-
-- IO-aware attention implementation
-- Memory optimization for long sequences
-- Significant speedup on modern GPUs
-
-**5. "TinyStories: How Small Can Language Models Be?"**
-
-- Demonstrated that small models can be surprisingly capable
-- Quality of data > quantity for learning
-- Synthetic datasets can be highly effective
-
-### Key Learnings from Implementation
-
-**Learning Rate Warmup is Critical**
-**Without warmup:** Training unstable, high initial loss
-**With warmup:** Smooth convergence from start
-
-
-**Gradient Accumulation Enables Large Batches**
-- Simulates batch size of 1,024 on limited GPU
-- More stable gradients
-- Better generalization
-
-
-**Mixed Precision = 2x Speedup**
-- Essential for efficient training
-- Minimal accuracy loss
-- Requires GradScaler for stability
-
-
-**Data Storage Matters**
-- Memory-mapped arrays prevent OOM errors
-- Binary format faster than text
-- Preprocessing saves training time
-
-
-## Technical Learnings
-**What I Learned**
-
-**1. Transformer Architecture Internals**
-- How attention mechanisms actually work
-- Importance of residual connections
-- Layer normalization placement affects training
-
-
-**2. Training Optimization**
-- Learning rate schedules impact convergence
-- Gradient clipping prevents exploding gradients
-- Early stopping prevents overfitting
-
-
-**3. PyTorch Best Practices**
-- Proper use of .to() and device management
-- Memory-efficient data loading
-- Automatic mixed precision training
-
-
-**4. Model Evaluation**
-- Perplexity as a metric
-- Difference between training and validation loss
-- Importance of monitoring both metrics
-
-
-**5. Debugging Deep Learning**
-- Checking gradient flow
-- Monitoring loss curves
-- Validating attention patterns
-
+Open the notebook in Colab with a GPU runtime and run the cells in order. It installs `datasets`
+and `tiktoken`, tokenizes TinyStories to disk (a few GB), trains, plots the loss and samples from
+the best checkpoint. Library versions are listed in [`requirements.txt`](requirements.txt).
 
 ## References
 
-- Vaswani et al. (2017) - "Attention Is All You Need"
-- Radford et al. (2019) - "Language Models are Unsupervised Multitask Learners"
-- Loshchilov & Hutter (2019) - "Decoupled Weight Decay Regularization"
-- Dao et al. (2022) - "FlashAttention: Fast and Memory-Efficient Exact Attention"
-- Eldan & Li (2023) - "TinyStories: How Small Can Language Models Be and Still Speak Coherent English?"
-- Karpathy's nanoGPT - Code reference and best practices
+- Eldan & Li (2023), *TinyStories: How Small Can Language Models Be and Still Speak Coherent English?*
+- Radford et al. (2019), *Language Models are Unsupervised Multitask Learners* (GPT-2)
+- Vaswani et al. (2017), *Attention Is All You Need*
+- Loshchilov & Hutter (2019), *Decoupled Weight Decay Regularization* (AdamW)
+- Dao et al. (2022), *FlashAttention*
+- Karpathy, [nanoGPT](https://github.com/karpathy/nanoGPT): the data preparation and batching code is adapted from it
 
-## Author 
-**Manjunath Irukulla**
-Email : imanjunaad@gmail.com
-LinkedIn: https://www.linkedin.com/in/irumanjunath/
+## Author
 
-##Acknowledgments
-- Andrej Karpathy for nanoGPT inspiration
-- Hugging Face for the TinyStories dataset
-- PyTorch team for excellent documentation
-- OpenAI for GPT-2 tokenizer
-
+Manjunath Irukulla · imanjunad@gmail.com · [LinkedIn](https://www.linkedin.com/in/irumanjunath/)
